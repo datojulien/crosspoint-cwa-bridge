@@ -14,10 +14,9 @@ from zipfile import ZipFile
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from lxml import etree
-from multidict import CIMultiDict
 from yarl import URL
 
-from crosspoint_cwa_bridge.app import _stream_file_response, create_app
+from crosspoint_cwa_bridge.app import create_app
 from crosspoint_cwa_bridge.cache import CACHE_SCHEMA_VERSION
 from crosspoint_cwa_bridge.config import Settings, validate_upstream_url
 from crosspoint_cwa_bridge.feeds import ATOM, FeedError, rewrite_cwa_href, rewrite_feed
@@ -818,39 +817,6 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         log_output = stream.getvalue()
         self.assertNotIn(AUTHORIZATION, log_output)
         self.assertNotIn("super-secret", log_output)
-
-
-class FileResponseSecurityTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        self.allowed = self.root / "allowed"
-        self.allowed.mkdir()
-        self.outside = self.root / "outside.epub"
-        self.outside.write_bytes(b"private")
-
-        async def handler(request: web.Request) -> web.StreamResponse:
-            return await _stream_file_response(
-                request,
-                self.outside,
-                allowed_root=self.allowed,
-                status=200,
-                headers=CIMultiDict(),
-            )
-
-        app = web.Application()
-        app.router.add_get("/", handler)
-        self.client = TestClient(TestServer(app))
-        await self.client.start_server()
-
-    async def asyncTearDown(self):
-        await self.client.close()
-        self.temp.cleanup()
-
-    async def test_streaming_rejects_a_file_outside_the_allowed_root(self):
-        response = await self.client.get("/")
-        self.assertEqual(response.status, 500)
-        self.assertEqual(await response.text(), "Bridge file unavailable\n")
 
 
 class SecurityUnitTests(unittest.TestCase):

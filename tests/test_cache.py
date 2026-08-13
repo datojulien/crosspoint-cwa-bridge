@@ -99,6 +99,10 @@ class DerivativeCacheTests(unittest.TestCase):
         self.assertEqual(lookup.hit.path.read_bytes(), self.derivative.read_bytes())
         self.assertEqual(lookup.hit.original_bytes, 100)
         self.assertEqual(lookup.hit.output_bytes, len(self.derivative.read_bytes()))
+        with self.cache.open_stream(self.key, profile="x3") as stream:
+            self.assertEqual(stream.read(), self.derivative.read_bytes())
+        with self.assertRaises(ValueError):
+            self.cache.open_stream("../private", profile="x3")
 
         all_text = "\n".join(
             str(path.relative_to(self.root))

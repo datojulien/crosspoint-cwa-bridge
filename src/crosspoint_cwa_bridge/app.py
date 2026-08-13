@@ -6,14 +6,13 @@ import asyncio
 from contextlib import suppress
 import hashlib
 import logging
-import os
 from pathlib import Path
 import re
 import signal
 import ssl
-import stat
 import tempfile
 import time
+from typing import BinaryIO
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, TCPConnector, web
 from multidict import CIMultiDict
@@ -200,42 +199,28 @@ def _is_optimized_epub_request(profile: str, tail: str) -> bool:
 
 async def _stream_file_response(
     request: web.Request,
-    path: Path,
+    stream: BinaryIO,
     *,
-    allowed_root: Path,
     status: int,
     headers: CIMultiDict[str],
 ) -> web.StreamResponse:
     try:
-        root = allowed_root.resolve(strict=True)
-        resolved = path.resolve(strict=True)
-        if not resolved.is_relative_to(root) or path.is_symlink():
-            raise ValueError("response file is outside its allowed root")
-        # The resolved path is contained by a trusted bridge-owned root above.
-        descriptor = os.open(  # lgtm[py/path-injection]
-            resolved,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-        )
-        file_stat = os.fstat(descriptor)
-        if not stat.S_ISREG(file_stat.st_mode):
-            os.close(descriptor)
-            raise ValueError("response file is not a regular file")
-    except (OSError, ValueError) as exc:
+        size = stream.seek(0, 2)
+        stream.seek(0)
+    except OSError as exc:
+        stream.close()
         raise web.HTTPInternalServerError(text="Bridge file unavailable\n") from exc
 
-    headers["Content-Length"] = str(file_stat.st_size)
+    headers["Content-Length"] = str(size)
     downstream = web.StreamResponse(status=status, headers=headers)
     try:
         await downstream.prepare(request)
-        with os.fdopen(descriptor, "rb") as stream:
-            descriptor = -1
-            for chunk in iter(lambda: stream.read(64 * 1024), b""):
-                await downstream.write(chunk)
+        for chunk in iter(lambda: stream.read(64 * 1024), b""):
+            await downstream.write(chunk)
     except ConnectionResetError:
         return downstream
     finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+        stream.close()
     with suppress(ConnectionResetError):
         await downstream.write_eof()
     return downstream
@@ -354,8 +339,9 @@ async def _optimized_epub_response(
                 upstream.close()
                 return await _stream_file_response(
                     request,
-                    cache_hit.path,
-                    allowed_root=settings.cache_dir,
+                    request.app[DERIVATIVE_CACHE_KEY].open_stream(
+                        cache_key, profile=profile
+                    ),
                     status=upstream.status,
                     headers=_derivative_headers(headers),
                 )
@@ -404,8 +390,9 @@ async def _optimized_epub_response(
                 if cache_hit is not None:
                     return await _stream_file_response(
                         request,
-                        cache_hit.path,
-                        allowed_root=settings.cache_dir,
+                        request.app[DERIVATIVE_CACHE_KEY].open_stream(
+                            cache_key, profile=profile
+                        ),
                         status=upstream.status,
                         headers=_derivative_headers(headers),
                     )
@@ -426,8 +413,9 @@ async def _optimized_epub_response(
                 if cache_hit is not None:
                     return await _stream_file_response(
                         request,
-                        cache_hit.path,
-                        allowed_root=settings.cache_dir,
+                        request.app[DERIVATIVE_CACHE_KEY].open_stream(
+                            cache_key, profile=profile
+                        ),
                         status=upstream.status,
                         headers=derivative_headers,
                     )
@@ -520,8 +508,7 @@ async def _optimized_epub_response(
 
         return await _stream_file_response(
             request,
-            response_path,
-            allowed_root=temp_dir,
+            response_path.open("rb"),
             status=upstream.status,
             headers=derivative_headers,
         )

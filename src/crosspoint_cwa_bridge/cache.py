@@ -11,7 +11,7 @@ import re
 import shutil
 import stat
 import tempfile
-from typing import Mapping
+from typing import BinaryIO, Mapping
 
 
 CACHE_SCHEMA_VERSION = 1
@@ -225,6 +225,19 @@ class DerivativeCache:
                 output_bytes=output_bytes,
             )
         )
+
+    def open_stream(self, key: str, *, profile: str) -> BinaryIO:
+        """Open a validated cache coordinate without following a final symlink."""
+        epub_path, _ = self._paths(key, profile)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(epub_path, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise OSError("cached derivative is not a regular file")
+            return os.fdopen(descriptor, "rb")
+        except Exception:
+            os.close(descriptor)
+            raise
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
