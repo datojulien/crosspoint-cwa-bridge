@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-08-13
+
+### Security
+
+- Constrain streamed derivative files to their expected cache or work root,
+  reject symbolic links and non-regular files, and open with no-follow semantics.
+- Return a fixed feed-error response without exposing parser exception details.
+
 ## [0.7.0] - 2026-08-13
 
 ### Added
@@ -46,6 +54,7 @@ All notable changes to this project are documented here. Versions follow
 - Completed OPDS/OpenSearch rewriting and encoded-path compatibility.
 
 [0.7.0]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.7.0
+[0.7.1]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.7.1
 [0.6.1]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.6.1
 [0.6.0]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.6.0
 [0.5.0]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.5.0

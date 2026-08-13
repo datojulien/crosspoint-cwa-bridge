@@ -6,10 +6,12 @@ import asyncio
 from contextlib import suppress
 import hashlib
 import logging
+import os
 from pathlib import Path
 import re
 import signal
 import ssl
+import stat
 import tempfile
 import time
 
@@ -200,18 +202,40 @@ async def _stream_file_response(
     request: web.Request,
     path: Path,
     *,
+    allowed_root: Path,
     status: int,
     headers: CIMultiDict[str],
 ) -> web.StreamResponse:
-    headers["Content-Length"] = str(path.stat().st_size)
-    downstream = web.StreamResponse(status=status, headers=headers)
-    await downstream.prepare(request)
     try:
-        with path.open("rb") as stream:
+        root = allowed_root.resolve(strict=True)
+        resolved = path.resolve(strict=True)
+        if not resolved.is_relative_to(root) or path.is_symlink():
+            raise ValueError("response file is outside its allowed root")
+        # The resolved path is contained by a trusted bridge-owned root above.
+        descriptor = os.open(  # lgtm[py/path-injection]
+            resolved,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            os.close(descriptor)
+            raise ValueError("response file is not a regular file")
+    except (OSError, ValueError) as exc:
+        raise web.HTTPInternalServerError(text="Bridge file unavailable\n") from exc
+
+    headers["Content-Length"] = str(file_stat.st_size)
+    downstream = web.StreamResponse(status=status, headers=headers)
+    try:
+        await downstream.prepare(request)
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
             for chunk in iter(lambda: stream.read(64 * 1024), b""):
                 await downstream.write(chunk)
     except ConnectionResetError:
         return downstream
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     with suppress(ConnectionResetError):
         await downstream.write_eof()
     return downstream
@@ -331,6 +355,7 @@ async def _optimized_epub_response(
                 return await _stream_file_response(
                     request,
                     cache_hit.path,
+                    allowed_root=settings.cache_dir,
                     status=upstream.status,
                     headers=_derivative_headers(headers),
                 )
@@ -380,6 +405,7 @@ async def _optimized_epub_response(
                     return await _stream_file_response(
                         request,
                         cache_hit.path,
+                        allowed_root=settings.cache_dir,
                         status=upstream.status,
                         headers=_derivative_headers(headers),
                     )
@@ -401,6 +427,7 @@ async def _optimized_epub_response(
                     return await _stream_file_response(
                         request,
                         cache_hit.path,
+                        allowed_root=settings.cache_dir,
                         status=upstream.status,
                         headers=derivative_headers,
                     )
@@ -494,6 +521,7 @@ async def _optimized_epub_response(
         return await _stream_file_response(
             request,
             response_path,
+            allowed_root=temp_dir,
             status=upstream.status,
             headers=derivative_headers,
         )
@@ -624,7 +652,7 @@ async def _proxy_opds_request(
                     upstream_origin=settings.upstream_url,
                     upstream_request_url=upstream_url,
                 )
-            except FeedError as exc:
+            except FeedError:
                 _log_event(
                     request,
                     logging.ERROR,
@@ -633,7 +661,7 @@ async def _proxy_opds_request(
                     upstream_route=_safe_upstream_route(upstream_url.path),
                     status=upstream.status,
                 )
-                raise web.HTTPBadGateway(text=f"Invalid CWA OPDS feed: {exc}\n")
+                raise web.HTTPBadGateway(text="Invalid CWA OPDS feed\n")
 
             for name in ("Content-Length", "Content-Range", "ETag", "Last-Modified"):
                 headers.popall(name, None)

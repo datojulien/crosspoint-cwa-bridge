@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crosspoint-cwa-bridge"
-version = "0.7.0"
+version = "0.7.1"
 description = "A stateless CrossPoint-specific OPDS bridge for Calibre-Web-Automated"
 readme = "README.md"
 requires-python = ">=3.11"
