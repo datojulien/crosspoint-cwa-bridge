@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
@@ -110,7 +111,13 @@ class PortalTests(unittest.IsolatedAsyncioTestCase):
         for value in private_values:
             self.assertNotIn(value, body)
 
-        status = await self.public_client.get("/api/status")
+        class FreshHostClock:
+            @staticmethod
+            def monotonic() -> float:
+                return 10.0
+
+        with patch("crosspoint_cwa_bridge.runtime.time", FreshHostClock):
+            status = await self.public_client.get("/api/status")
         payload = await status.json()
         self.assertEqual(payload["version"], "0.7.1")
         self.assertEqual(payload["cwa"]["state"], "reachable")
