@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Local status and setup portal for the CrossPoint–CWA Bridge.">
+  <title>CrossPoint–CWA Bridge</title>
+  <link rel="stylesheet" href="/assets/portal.css">
+  <script src="/assets/portal.js" defer></script>
+</head>
+<body class="public-page">
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <header class="site-header shell">
+    <a class="brand" href="/" aria-label="CrossPoint–CWA Bridge home">
+      <span class="brand-mark" aria-hidden="true">CP</span>
+      <span><strong>CrossPoint</strong><small>CWA Bridge</small></span>
+    </a>
+    <span class="network-pill"><span class="status-dot" aria-hidden="true"></span>Private network</span>
+  </header>
+
+  <main id="main">
+    <section class="hero shell">
+      <div class="hero-copy">
+        <p class="eyebrow">A quiet link between your library and reader</p>
+        <h1>Your books, prepared for the CrossPoint in your hand.</h1>
+        <p class="lede">Browse Calibre-Web as usual. The bridge preserves your account permissions, optimizes EPUB images for X3 or X4, and keeps reusable copies outside your library.</p>
+        <div class="url-panel" aria-labelledby="opds-heading">
+          <div>
+            <span id="opds-heading" class="field-label">CrossPoint OPDS address</span>
+            <code id="opds-url">{{PUBLIC_BASE_URL}}/opds</code>
+          </div>
+          <button id="copy-opds" class="button primary" type="button">Copy address</button>
+        </div>
+      </div>
+      <div class="reader-card" aria-hidden="true">
+        <div class="reader-screen">
+          <span>CALIBRE-WEB</span>
+          <strong>Choose your reader</strong>
+          <i>CrossPoint X3</i><i>CrossPoint X4</i><i>Original EPUB</i>
+        </div>
+      </div>
+    </section>
+
+    <section class="status-section shell" aria-labelledby="status-heading">
+      <div class="section-heading">
+        <div><p class="eyebrow">Live overview</p><h2 id="status-heading">Everything at a glance</h2></div>
+        <button id="refresh-status" class="button quiet" type="button">Refresh status</button>
+      </div>
+      <div id="status-message" class="notice" role="status" aria-live="polite">Checking the bridge…</div>
+      <div class="status-grid">
+        <article class="metric-card"><span>Bridge</span><strong id="bridge-state">Checking</strong><small id="bridge-version">Version —</small></article>
+        <article class="metric-card"><span>Calibre-Web</span><strong id="cwa-state">Checking</strong><small id="cwa-checked">Awaiting contact</small></article>
+        <article class="metric-card"><span>Uptime</span><strong id="uptime">—</strong><small>Since the last bridge restart</small></article>
+        <article class="metric-card"><span>Cached editions</span><strong id="cache-total">—</strong><small id="cache-size">X3 and X4 combined</small></article>
+      </div>
+    </section>
+
+    <section class="profiles shell" aria-labelledby="profiles-heading">
+      <div class="section-heading"><div><p class="eyebrow">Three paths, one library</p><h2 id="profiles-heading">Choose once, then browse normally</h2></div></div>
+      <div class="profile-grid">
+        <article><span class="profile-number">03</span><h3>CrossPoint X3</h3><p>Fits images within 528 × 792, converts them to e-ink-friendly grayscale, and caches the result.</p><strong id="x3-cache">0 cached</strong></article>
+        <article><span class="profile-number">04</span><h3>CrossPoint X4</h3><p>Uses the X4’s 480 × 800 image profile while keeping the same CWA menus, shelves, and search.</p><strong id="x4-cache">0 cached</strong></article>
+        <article><span class="profile-number">∞</span><h3>Original EPUB</h3><p>Streams CWA’s original file unchanged when you want the untouched master edition.</p><strong>No derivative stored</strong></article>
+      </div>
+    </section>
+
+    <section class="privacy-band">
+      <div class="shell privacy-content">
+        <div><p class="eyebrow">Local by design</p><h2>Your library stays authoritative.</h2></div>
+        <p>The bridge stores no passwords, titles, search terms, or book identifiers in this page. It cannot administer Docker, CWA, the Raspberry Pi, or your Calibre library.</p>
+        <a id="admin-link" class="button dark" href="{{ADMIN_PUBLIC_URL}}/admin">Open administration</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="shell"><span>CrossPoint–CWA Bridge</span><span>Local service · <span id="footer-version">v—</span></span></footer>
+</body>
+</html>

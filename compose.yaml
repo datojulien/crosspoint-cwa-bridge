@@ -1,0 +1,67 @@
+name: crosspoint-cwa-bridge
+
+services:
+  bridge:
+    build:
+      context: .
+    image: ${BRIDGE_IMAGE:-crosspoint-cwa-bridge:local}
+    user: "${BRIDGE_UID:-1000}:${BRIDGE_GID:-1000}"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      BRIDGE_HOST: "0.0.0.0"
+      BRIDGE_PORT: "8094"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://127.0.0.1:8094}"
+      ADMIN_HOST: "0.0.0.0"
+      ADMIN_PORT: "8095"
+      ADMIN_PUBLIC_URL: "${ADMIN_PUBLIC_URL:-https://127.0.0.1:8095}"
+      ADMIN_STATE_DIR: "/var/lib/crosspoint-cwa-bridge/admin"
+      ADMIN_TLS_CERTIFICATE: "/var/lib/crosspoint-cwa-bridge/admin/tls.crt"
+      ADMIN_TLS_PRIVATE_KEY: "/var/lib/crosspoint-cwa-bridge/admin/tls.key"
+      CWA_UPSTREAM_URL: "${CWA_UPSTREAM_URL:-http://cwa:8083}"
+      FEED_MAX_BYTES: "8388608"
+      CACHE_DIR: "/var/cache/crosspoint-cwa-bridge"
+      WORK_DIR: "/var/lib/crosspoint-cwa-bridge/work"
+      OPTIMIZER_JPEG_QUALITY: "85"
+      OPTIMIZER_MAX_IMAGE_PIXELS: "40000000"
+      OPTIMIZER_MAX_EPUB_BYTES: "2147483648"
+      UPSTREAM_CONNECT_TIMEOUT_SECONDS: "10"
+      UPSTREAM_READ_TIMEOUT_SECONDS: "60"
+    ports:
+      - "${BRIDGE_BIND_ADDRESS:-127.0.0.1}:8094:8094"
+      - "${BRIDGE_BIND_ADDRESS:-127.0.0.1}:8095:8095"
+    volumes:
+      - ./cache:/var/cache/crosspoint-cwa-bridge
+      - ./work:/var/lib/crosspoint-cwa-bridge/work
+      - ./state:/var/lib/crosspoint-cwa-bridge/admin
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - cwa
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8094/healthz', timeout=3).read()
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  cwa:
+    name: "${CWA_DOCKER_NETWORK:-cwa_default}"
+    external: true

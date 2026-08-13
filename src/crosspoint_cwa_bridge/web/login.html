@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Secure local administration for the CrossPoint–CWA Bridge.">
+  <title>Bridge administration</title>
+  <link rel="stylesheet" href="/admin/assets/portal.css">
+  <script src="/admin/assets/admin.js" defer></script>
+</head>
+<body class="login-page">
+  <a class="skip-link" href="#login">Skip to sign in</a>
+  <main class="login-layout">
+    <section class="login-intro">
+      <a class="brand light" href="{{PUBLIC_BASE_URL}}/">
+        <span class="brand-mark" aria-hidden="true">CP</span>
+        <span><strong>CrossPoint</strong><small>CWA Bridge</small></span>
+      </a>
+      <div><p class="eyebrow">Bridge-only control</p><h1>A small console for a small, dependable service.</h1><p>Manage optimized copies and safe tuning without granting access to Docker, Calibre-Web, or your library.</p></div>
+      <p class="login-footnote">Encrypted locally with the certificate you verified during setup.</p>
+    </section>
+    <section id="login" class="login-form-wrap">
+      <form id="login-form" class="form-card">
+        <p class="eyebrow">Private administration</p>
+        <h2>Welcome back</h2>
+        <p>Use the separate bridge administrator account.</p>
+        <label for="username">Username</label>
+        <input id="username" name="username" value="bridge-admin" autocomplete="username" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+        <button class="button primary full" type="submit">Sign in securely</button>
+        <div id="login-message" class="form-message" role="alert" aria-live="assertive"></div>
+        <a class="back-link" href="{{PUBLIC_BASE_URL}}/">← Return to public status</a>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

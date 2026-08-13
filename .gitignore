@@ -1,0 +1,16 @@
+.DS_Store
+.venv/
+.env
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+.pytest_cache/
+pasted-text.txt
+cache/*
+!cache/.gitkeep
+work/*
+!work/.gitkeep
+state/*
+!state/.gitkeep
+rollback/

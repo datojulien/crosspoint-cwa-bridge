@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Administration console for the CrossPoint–CWA Bridge.">
+  <title>Bridge console</title>
+  <link rel="stylesheet" href="/admin/assets/portal.css">
+  <script src="/admin/assets/admin.js" defer></script>
+</head>
+<body class="admin-page">
+  <a class="skip-link" href="#admin-main">Skip to main content</a>
+  <header class="admin-header">
+    <a class="brand" href="{{PUBLIC_BASE_URL}}/"><span class="brand-mark" aria-hidden="true">CP</span><span><strong>CrossPoint</strong><small>Bridge console</small></span></a>
+    <nav aria-label="Console actions"><a href="{{PUBLIC_BASE_URL}}/">Public status</a><button id="logout" class="button quiet" type="button">Sign out</button></nav>
+  </header>
+  <main id="admin-main" class="admin-shell">
+    <section class="admin-hero">
+      <div><p class="eyebrow">Bridge administration</p><h1>Healthy books. Predictable delivery.</h1><p>Inspect the local bridge, tune safe limits, and manage derivatives without touching your source library.</p></div>
+      <div class="hero-actions"><button id="run-diagnostics" class="button quiet" type="button">Run diagnostics</button><button id="restart-bridge" class="button primary" type="button">Restart bridge</button></div>
+    </section>
+    <div id="admin-message" class="notice" role="status" aria-live="polite">Loading console…</div>
+
+    <section aria-labelledby="overview-heading"><div class="section-heading"><div><p class="eyebrow">Now</p><h2 id="overview-heading">Service overview</h2></div><button id="refresh-admin" class="button quiet" type="button">Refresh</button></div>
+      <div class="status-grid admin-metrics">
+        <article class="metric-card"><span>Bridge</span><strong id="admin-bridge-state">Checking</strong><small id="admin-version">—</small></article>
+        <article class="metric-card"><span>CWA</span><strong id="admin-cwa-state">Checking</strong><small id="admin-cwa-detail">—</small></article>
+        <article class="metric-card"><span>Conversion</span><strong id="conversion-state">Idle</strong><small id="conversion-detail">One at a time</small></article>
+        <article class="metric-card"><span>Free storage</span><strong id="storage-free">—</strong><small id="storage-total">—</small></article>
+      </div>
+    </section>
+
+    <div class="admin-columns">
+      <section class="panel" aria-labelledby="cache-heading"><div class="panel-heading"><div><p class="eyebrow">Derivatives</p><h2 id="cache-heading">Cache</h2></div></div>
+        <div class="cache-row"><div><strong>X3</strong><span id="admin-x3-cache">—</span></div><button class="button danger-outline purge-cache" data-scope="x3" type="button">Clear X3</button></div>
+        <div class="cache-row"><div><strong>X4</strong><span id="admin-x4-cache">—</span></div><button class="button danger-outline purge-cache" data-scope="x4" type="button">Clear X4</button></div>
+        <button class="button danger full purge-cache" data-scope="all" type="button">Clear all derivatives</button>
+        <p class="helper">Active transfers finish before cleanup. Source books are never removed.</p>
+      </section>
+
+      <section class="panel" aria-labelledby="settings-heading"><div class="panel-heading"><div><p class="eyebrow">Safe tuning</p><h2 id="settings-heading">Optimizer settings</h2></div><span id="pending-badge" class="badge" hidden>Restart pending</span></div>
+        <form id="settings-form" class="settings-grid">
+          <label>JPEG quality<input name="optimizer_jpeg_quality" type="number" min="1" max="95" required><small>1–95</small></label>
+          <label>Feed limit (bytes)<input name="feed_max_bytes" type="number" min="65536" max="67108864" required></label>
+          <label>Image pixel limit<input name="optimizer_max_image_pixels" type="number" min="1000000" max="200000000" required></label>
+          <label>EPUB limit (bytes)<input name="optimizer_max_epub_bytes" type="number" min="16777216" max="4294967296" required></label>
+          <label>Connect timeout (seconds)<input name="connect_timeout_seconds" type="number" min="1" max="60" step="0.5" required></label>
+          <label>Read timeout (seconds)<input name="read_timeout_seconds" type="number" min="5" max="600" step="0.5" required></label>
+          <button class="button primary" type="submit">Review and save</button>
+        </form>
+        <div id="settings-diff" class="settings-diff" aria-live="polite"></div>
+      </section>
+    </div>
+
+    <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="panel-heading"><div><p class="eyebrow">Sanitized history</p><h2 id="activity-heading">Recent activity</h2></div><span>Retained for 7 days</span></div><div id="activity-list" class="activity-list"><p>Loading activity…</p></div></section>
+
+    <section class="panel account-panel" aria-labelledby="account-heading"><div><p class="eyebrow">Account</p><h2 id="account-heading">Change bridge password</h2><p>This signs out every administration session. It does not change your Calibre-Web login.</p></div>
+      <form id="password-form" class="password-form"><label>Current password<input name="current_password" type="password" autocomplete="current-password" required></label><label>New password<input name="new_password" type="password" minlength="12" autocomplete="new-password" required></label><button class="button dark" type="submit">Change password</button></form>
+    </section>
+  </main>
+</body>
+</html>
