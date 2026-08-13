@@ -4,4 +4,4 @@ lxml==6.1.1
 Pillow==12.3.0
 
 # Pinned build backend used with --no-build-isolation.
-setuptools==83.0.0
+setuptools==84.0.0
