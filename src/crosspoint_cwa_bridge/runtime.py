@@ -146,11 +146,19 @@ class BridgeRuntime:
 
     async def probe_upstream(self, *, force: bool = False) -> UpstreamStatus:
         now = time.monotonic()
-        if not force and now - self.upstream.checked_monotonic < 60:
+        if (
+            not force
+            and self.upstream.checked_monotonic > 0
+            and now - self.upstream.checked_monotonic < 60
+        ):
             return self.upstream
         async with self._upstream_lock:
             now = time.monotonic()
-            if not force and now - self.upstream.checked_monotonic < 60:
+            if (
+                not force
+                and self.upstream.checked_monotonic > 0
+                and now - self.upstream.checked_monotonic < 60
+            ):
                 return self.upstream
             if self.client_session is None:
                 return self.upstream

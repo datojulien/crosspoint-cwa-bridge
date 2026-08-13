@@ -288,7 +288,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         payload = await response.json()
         self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["version"], "0.7.0")
+        self.assertEqual(payload["version"], "0.7.1")
         self.assertEqual(payload["optimizer_version"], OPTIMIZER_VERSION)
         self.assertEqual(payload["cache_schema_version"], CACHE_SCHEMA_VERSION)
 
@@ -494,7 +494,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         try:
             response = await limited_client.get("/opds/crosspoint/x3/large")
             self.assertEqual(response.status, 502)
-            self.assertIn("size limit", await response.text())
+            self.assertEqual(await response.text(), "Invalid CWA OPDS feed\n")
         finally:
             await limited_client.close()
 

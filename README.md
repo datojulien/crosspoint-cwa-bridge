@@ -14,7 +14,7 @@ owners.
 
 ## What it does
 
-Version 0.7.0 provides:
+Version 0.7.1 provides:
 
 - a model selector at `/opds` and direct `/opds/X3` and `/opds/X4` endpoints;
 - byte-preserving OPDS proxying with Basic Auth and CWA permissions intact;

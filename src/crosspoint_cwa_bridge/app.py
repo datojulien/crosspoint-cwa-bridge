@@ -12,6 +12,7 @@ import signal
 import ssl
 import tempfile
 import time
+from typing import BinaryIO
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, TCPConnector, web
 from multidict import CIMultiDict
@@ -198,20 +199,28 @@ def _is_optimized_epub_request(profile: str, tail: str) -> bool:
 
 async def _stream_file_response(
     request: web.Request,
-    path: Path,
+    stream: BinaryIO,
     *,
     status: int,
     headers: CIMultiDict[str],
 ) -> web.StreamResponse:
-    headers["Content-Length"] = str(path.stat().st_size)
-    downstream = web.StreamResponse(status=status, headers=headers)
-    await downstream.prepare(request)
     try:
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(64 * 1024), b""):
-                await downstream.write(chunk)
+        size = stream.seek(0, 2)
+        stream.seek(0)
+    except OSError as exc:
+        stream.close()
+        raise web.HTTPInternalServerError(text="Bridge file unavailable\n") from exc
+
+    headers["Content-Length"] = str(size)
+    downstream = web.StreamResponse(status=status, headers=headers)
+    try:
+        await downstream.prepare(request)
+        for chunk in iter(lambda: stream.read(64 * 1024), b""):
+            await downstream.write(chunk)
     except ConnectionResetError:
         return downstream
+    finally:
+        stream.close()
     with suppress(ConnectionResetError):
         await downstream.write_eof()
     return downstream
@@ -330,7 +339,9 @@ async def _optimized_epub_response(
                 upstream.close()
                 return await _stream_file_response(
                     request,
-                    cache_hit.path,
+                    request.app[DERIVATIVE_CACHE_KEY].open_stream(
+                        cache_key, profile=profile
+                    ),
                     status=upstream.status,
                     headers=_derivative_headers(headers),
                 )
@@ -340,7 +351,7 @@ async def _optimized_epub_response(
     ) as temp_name:
         temp_dir = Path(temp_name)
         source_path = temp_dir / "source.epub"
-        derivative_path = temp_dir / f"{profile}.epub"
+        derivative_path = temp_dir / "derivative.epub"
         received = 0
         source_digest = hashlib.sha256()
         try:
@@ -379,13 +390,15 @@ async def _optimized_epub_response(
                 if cache_hit is not None:
                     return await _stream_file_response(
                         request,
-                        cache_hit.path,
+                        request.app[DERIVATIVE_CACHE_KEY].open_stream(
+                            cache_key, profile=profile
+                        ),
                         status=upstream.status,
                         headers=_derivative_headers(headers),
                     )
 
         derivative_headers = _derivative_headers(headers)
-        response_path: Path
+        response_stream: BinaryIO
         async with request.app[CONVERSION_SEMAPHORE_KEY]:
             # A concurrent request may have populated this key while this
             # request downloaded its source or waited for the CPU slot.
@@ -400,7 +413,9 @@ async def _optimized_epub_response(
                 if cache_hit is not None:
                     return await _stream_file_response(
                         request,
-                        cache_hit.path,
+                        request.app[DERIVATIVE_CACHE_KEY].open_stream(
+                            cache_key, profile=profile
+                        ),
                         status=upstream.status,
                         headers=derivative_headers,
                     )
@@ -444,7 +459,7 @@ async def _optimized_epub_response(
                     )
                     derivative_headers = headers.copy()
                     derivative_headers["Cache-Control"] = "private, no-store"
-                    response_path = source_path
+                    response_stream = source_path.open("rb")
                 else:
                     _log_event(
                         request,
@@ -459,7 +474,7 @@ async def _optimized_epub_response(
                         image_count=result.image_count,
                         repair_count=result.repair_count,
                     )
-                    response_path = derivative_path
+                    response_stream = derivative_path.open("rb")
                     try:
                         published = await asyncio.to_thread(
                             request.app[DERIVATIVE_CACHE_KEY].publish,
@@ -493,7 +508,7 @@ async def _optimized_epub_response(
 
         return await _stream_file_response(
             request,
-            response_path,
+            response_stream,
             status=upstream.status,
             headers=derivative_headers,
         )
@@ -624,7 +639,7 @@ async def _proxy_opds_request(
                     upstream_origin=settings.upstream_url,
                     upstream_request_url=upstream_url,
                 )
-            except FeedError as exc:
+            except FeedError:
                 _log_event(
                     request,
                     logging.ERROR,
@@ -633,7 +648,7 @@ async def _proxy_opds_request(
                     upstream_route=_safe_upstream_route(upstream_url.path),
                     status=upstream.status,
                 )
-                raise web.HTTPBadGateway(text=f"Invalid CWA OPDS feed: {exc}\n")
+                raise web.HTTPBadGateway(text="Invalid CWA OPDS feed\n")
 
             for name in ("Content-Length", "Content-Range", "ETag", "Last-Modified"):
                 headers.popall(name, None)
