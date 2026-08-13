@@ -351,7 +351,7 @@ async def _optimized_epub_response(
     ) as temp_name:
         temp_dir = Path(temp_name)
         source_path = temp_dir / "source.epub"
-        derivative_path = temp_dir / f"{profile}.epub"
+        derivative_path = temp_dir / "derivative.epub"
         received = 0
         source_digest = hashlib.sha256()
         try:
@@ -398,7 +398,7 @@ async def _optimized_epub_response(
                     )
 
         derivative_headers = _derivative_headers(headers)
-        response_path: Path
+        response_stream: BinaryIO
         async with request.app[CONVERSION_SEMAPHORE_KEY]:
             # A concurrent request may have populated this key while this
             # request downloaded its source or waited for the CPU slot.
@@ -459,7 +459,7 @@ async def _optimized_epub_response(
                     )
                     derivative_headers = headers.copy()
                     derivative_headers["Cache-Control"] = "private, no-store"
-                    response_path = source_path
+                    response_stream = source_path.open("rb")
                 else:
                     _log_event(
                         request,
@@ -474,7 +474,7 @@ async def _optimized_epub_response(
                         image_count=result.image_count,
                         repair_count=result.repair_count,
                     )
-                    response_path = derivative_path
+                    response_stream = derivative_path.open("rb")
                     try:
                         published = await asyncio.to_thread(
                             request.app[DERIVATIVE_CACHE_KEY].publish,
@@ -508,7 +508,7 @@ async def _optimized_epub_response(
 
         return await _stream_file_response(
             request,
-            response_path.open("rb"),
+            response_stream,
             status=upstream.status,
             headers=derivative_headers,
         )
