@@ -26,7 +26,7 @@ from lxml import etree
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 
-OPTIMIZER_VERSION = "crosspoint-standard-v1"
+OPTIMIZER_VERSION = "crosspoint-standard-v3"
 DEFAULT_JPEG_QUALITY = 85
 DEFAULT_MAX_IMAGE_PIXELS = 40_000_000
 DEFAULT_MAX_IMAGE_BYTES = 256 * 1024 * 1024
@@ -96,6 +96,38 @@ def _safe_archive_name(name: str) -> str:
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise OptimizationError("EPUB contains an unsafe archive path")
     return str(path)
+
+
+def _canonical_archive_name(name: str) -> str:
+    """Resolve internal ZIP dot segments without ever escaping the archive root."""
+    if not name or "\x00" in name or "\\" in name:
+        raise OptimizationError("EPUB contains an invalid archive path")
+    if name.startswith("/"):
+        raise OptimizationError("EPUB contains an unsafe archive path")
+    parts: list[str] = []
+    for part in name.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                raise OptimizationError("EPUB contains an unsafe archive path")
+            parts.pop()
+        else:
+            parts.append(part)
+    return _safe_archive_name("/".join(parts))
+
+
+def _same_archive_contents(archive: ZipFile, first: ZipInfo, second: ZipInfo) -> bool:
+    """Compare aliases in bounded chunks; CRC equality alone is insufficient."""
+    if first.file_size != second.file_size:
+        return False
+    with archive.open(first) as left, archive.open(second) as right:
+        while True:
+            chunk = left.read(64 * 1024)
+            if chunk != right.read(64 * 1024):
+                return False
+            if not chunk:
+                return True
 
 
 def _is_symlink(info: ZipInfo) -> bool:
@@ -237,6 +269,165 @@ def _replace_html_named_entities(text: str) -> str:
         return f"&#{html.entities.name2codepoint[name]};"
 
     return re.sub(r"&([A-Za-z][A-Za-z0-9]+);", replace, text)
+
+
+def _parse_download_xhtml(data: bytes) -> None:
+    # Match the optimizer's HTML-entity support without decoding/re-encoding
+    # the document, so its XML encoding declaration remains authoritative.
+    def replace(match: re.Match[bytes]) -> bytes:
+        name = match.group(1).decode("ascii")
+        if name in {"amp", "lt", "gt", "quot", "apos"}:
+            return match.group(0)
+        codepoint = html.entities.name2codepoint.get(name)
+        return f"&#{codepoint};".encode("ascii") if codepoint else match.group(0)
+
+    ready = re.sub(rb"&([A-Za-z][A-Za-z0-9]+);", replace, data)
+    etree.fromstring(ready, parser=_xml_parser())
+
+
+_XML_TOKENS = re.compile(
+    rb"<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|"
+    rb"<!DOCTYPE(?:[^>\"'\[]|\"[^\"]*\"|'[^']*'|\[[\s\S]*?\])*>|"
+    rb"<(?:[^>\"']|\"[^\"]*\"|'[^']*')*>",
+    re.IGNORECASE,
+)
+
+
+def _repair_charset_meta(data: bytes) -> tuple[bytes, int]:
+    """Close charset meta tags in the head; leave comments and CDATA alone."""
+    in_head = False
+    repairs = 0
+
+    def replace(match: re.Match[bytes]) -> bytes:
+        nonlocal in_head, repairs
+        tag = match.group(0)
+        if re.match(rb"<head(?:\s|>)", tag, re.IGNORECASE):
+            in_head = True
+        elif re.match(rb"</head\s*>", tag, re.IGNORECASE):
+            in_head = False
+        elif in_head and re.match(rb"<meta\s", tag, re.IGNORECASE):
+            if tag.rstrip().endswith(b"/>"):
+                return tag
+            attributes = re.findall(
+                rb"\s+([A-Za-z_:][-A-Za-z0-9_.:]*)\s*=\s*([\"'])(.*?)\2",
+                tag,
+                flags=re.DOTALL,
+            )
+            if any(name.lower() == b"charset" for name, _, _ in attributes):
+                repairs += 1
+                return tag[:-1] + b"/>"
+        return tag
+
+    return _XML_TOKENS.sub(replace, data), repairs
+
+
+def _inspect_download_markup(
+    archive: ZipFile, names: dict[str, ZipInfo], *, repair: bool,
+    max_text_bytes: int = DEFAULT_MAX_TEXT_BYTES,
+) -> tuple[set[str], int]:
+    opf_path = _find_opf_path(archive, names)
+    try:
+        opf = etree.fromstring(
+            _read_limited(archive, names[opf_path], max_text_bytes, "OPF package"),
+            parser=_xml_parser(),
+        )
+    except etree.XMLSyntaxError as exc:
+        raise OptimizationError("EPUB package is malformed") from exc
+    documents = {
+        name for name in names if PurePosixPath(name).suffix.lower() in XHTML_EXTENSIONS
+    }
+    for item in (node for node in opf.iter() if _local_name(node) == "item"):
+        if item.get("media-type") != "application/xhtml+xml":
+            continue
+        reference = _archive_reference(opf_path, item.get("href", ""))
+        if not reference or reference not in names:
+            raise OptimizationError("EPUB XHTML resource is missing")
+        documents.add(reference)
+
+    changes: set[str] = set()
+    repairs = 0
+    for name in sorted(documents):
+        data = _read_limited(archive, names[name], max_text_bytes, "XHTML document")
+        try:
+            _parse_download_xhtml(data)
+            continue
+        except etree.XMLSyntaxError as exc:
+            if not repair:
+                raise OptimizationError("EPUB XHTML is malformed") from exc
+        fixed, count = _repair_charset_meta(data)
+        try:
+            _parse_download_xhtml(fixed)
+        except etree.XMLSyntaxError as exc:
+            raise OptimizationError("EPUB XHTML cannot be safely repaired") from exc
+        changes.add(name)
+        repairs += count
+    return changes, repairs
+
+
+def prepare_epub_download(
+    source_path: str | os.PathLike[str], destination_path: str | os.PathLike[str],
+) -> tuple[Path, int]:
+    """Validate chapters and return the source or a minimally repaired copy."""
+    source_path, destination_path = Path(source_path), Path(destination_path)
+    if source_path.resolve() == destination_path.resolve():
+        raise ValueError("source and destination must be different files")
+    partial_path = destination_path.with_name(destination_path.name + ".partial")
+    try:
+        with ZipFile(source_path) as archive:
+            infos = archive.infolist()
+            _validate_archive_limits(
+                infos, max_archive_entries=DEFAULT_MAX_ARCHIVE_ENTRIES,
+                max_uncompressed_bytes=DEFAULT_MAX_UNCOMPRESSED_BYTES,
+            )
+            names: dict[str, ZipInfo] = {}
+            alias_repairs = 0
+            for info in infos:
+                name = _canonical_archive_name(info.filename.rstrip("/"))
+                if info.is_dir():
+                    continue
+                if _is_symlink(info) or info.flag_bits & 0x1:
+                    raise OptimizationError("EPUB has unsupported ZIP entries")
+                if name in names:
+                    previous = names[name]
+                    if previous.filename == info.filename or not _same_archive_contents(archive, previous, info):
+                        raise OptimizationError("EPUB ZIP contains conflicting entry names")
+                    alias_repairs += 1
+                    continue
+                names[name] = info
+            if "mimetype" not in names or archive.read("mimetype") != MIMETYPE:
+                raise OptimizationError("EPUB mimetype is invalid")
+            if archive.testzip() is not None:
+                raise OptimizationError("EPUB ZIP checksum failed")
+            changes, repairs = _inspect_download_markup(archive, names, repair=True)
+            path_repairs = sum(name != info.filename for name, info in names.items())
+            repairs += path_repairs + alias_repairs
+            if not changes and not path_repairs and not alias_repairs:
+                return source_path, 0
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            with ZipFile(partial_path, "w") as output:
+                output.comment = archive.comment
+                for info in infos:
+                    name = _canonical_archive_name(info.filename.rstrip("/"))
+                    if info.is_dir():
+                        name += "/"
+                    elif names[name] is not info:
+                        continue
+                    if name in changes:
+                        data = _read_limited(
+                            archive, info, DEFAULT_MAX_TEXT_BYTES, "XHTML document"
+                        )
+                        fixed, _ = _repair_charset_meta(data)
+                        _write_bytes(output, info, name, fixed, info.compress_type)
+                    else:
+                        _stream_copy(
+                            archive, output, info, compression=info.compress_type, filename=name
+                        )
+        os.replace(partial_path, destination_path)
+        return destination_path, repairs
+    except (BadZipFile, OSError, KeyError) as exc:
+        raise OptimizationError("invalid or unreadable EPUB ZIP") from exc
+    finally:
+        partial_path.unlink(missing_ok=True)
 
 
 def _serialize_xml(
@@ -704,9 +895,10 @@ def _write_bytes(
 
 
 def _stream_copy(
-    source: ZipFile, output: ZipFile, info: ZipInfo, *, compression: int
+    source: ZipFile, output: ZipFile, info: ZipInfo, *, compression: int,
+    filename: str | None = None,
 ) -> None:
-    target_info = _clone_info(info, info.filename, compression)
+    target_info = _clone_info(info, filename if filename is not None else info.filename, compression)
     with (
         source.open(info, "r") as reader,
         output.open(target_info, "w", force_zip64=True) as writer,
@@ -759,7 +951,7 @@ def optimize_epub(
             )
             names: dict[str, ZipInfo] = {}
             for info in infos:
-                name = _safe_archive_name(info.filename.rstrip("/"))
+                name = _canonical_archive_name(info.filename.rstrip("/"))
                 if info.is_dir():
                     continue
                 if _is_symlink(info):
@@ -767,8 +959,14 @@ def optimize_epub(
                 if info.flag_bits & 0x1:
                     raise OptimizationError("encrypted EPUB entries are unsupported")
                 if name in names:
-                    raise OptimizationError("EPUB ZIP contains duplicate entry names")
+                    previous = names[name]
+                    if previous.filename == info.filename or not _same_archive_contents(source, previous, info):
+                        raise OptimizationError("EPUB ZIP contains conflicting entry names")
+                    counters.repairs += 1
+                    continue
                 names[name] = info
+                if name != info.filename:
+                    counters.repairs += 1
 
             renamed = {
                 name: _target_image_name(name)
@@ -847,7 +1045,9 @@ def optimize_epub(
                             )
                             _write_bytes(output, info, name, data, ZIP_DEFLATED)
                         else:
-                            _stream_copy(source, output, info, compression=ZIP_DEFLATED)
+                            _stream_copy(
+                                source, output, info, compression=ZIP_DEFLATED, filename=name
+                            )
 
         validate_optimized_epub(
             partial_path,
@@ -902,6 +1102,7 @@ def validate_optimized_epub(
                 raise OptimizationError("mimetype content is invalid")
 
             names = {info.filename: info for info in infos if not info.is_dir()}
+            _inspect_download_markup(archive, names, repair=False)
             opf_path = _find_opf_path(archive, names)
             opf_data = _read_limited(
                 archive, names[opf_path], DEFAULT_MAX_TEXT_BYTES, "OPF package"
@@ -960,5 +1161,6 @@ __all__ = [
     "OptimizationError",
     "OptimizationResult",
     "optimize_epub",
+    "prepare_epub_download",
     "validate_optimized_epub",
 ]

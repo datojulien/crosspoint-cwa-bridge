@@ -14,12 +14,13 @@ owners.
 
 ## What it does
 
-Version 0.7.1 provides:
+Version 0.7.3 provides:
 
-- a model selector at `/opds` and direct `/opds/X3` and `/opds/X4` endpoints;
+- a model selector at `/opds`, direct `/opds/X3` and `/opds/X4` endpoints,
+  and an unmodified-EPUB `/opds/koreader` endpoint;
 - byte-preserving OPDS proxying with Basic Auth and CWA permissions intact;
 - X3/X4 image optimisation, EPUB repair, and checksum-validated derivatives;
-- safe delivery of the original EPUB when conversion cannot be completed;
+- validated EPUB fallback when image conversion cannot be completed;
 - a privacy-minimal status portal on HTTP port `8094`;
 - a separate HTTPS administration console on port `8095`;
 - bridge-only settings, diagnostics, anonymous activity, cache cleanup,
@@ -84,6 +85,7 @@ Landing page:  http://192.168.1.50:8094/
 OPDS selector: http://192.168.1.50:8094/opds
 CrossPoint X3: http://192.168.1.50:8094/opds/X3
 CrossPoint X4: http://192.168.1.50:8094/opds/X4
+KOReader:      http://192.168.1.50:8094/opds/koreader
 Administration: https://192.168.1.50:8095/admin
 ```
 
@@ -124,6 +126,25 @@ python3 -m venv .venv
 
 Tests use synthetic local EPUB and CWA fixtures. They do not access a Calibre
 library. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+## EPUB download validation
+
+Before sending an X3/X4 EPUB download, the bridge checks ZIP integrity and
+chapter XHTML, including manifest documents with an `.xml` extension. It
+repairs the unclosed charset `<meta>` tags introduced by CWA's Kindle EPUB
+fixer, then optimizes and caches the corrected derivative. Calibre's library
+file is left intact. Internal ZIP dot segments are canonicalized, and byte-identical
+aliases are collapsed. Root escapes and conflicting aliases remain rejected.
+
+If image optimization fails, the bridge serves the validated source or the
+minimally repaired copy. It returns HTTP 502 for markup it cannot safely
+repair, and HTTP 413 for EPUBs beyond the processing limit, before sending
+EPUB bytes. Original/KOReader profiles retain byte-identical passthrough.
+This repair closes charset tags; it does not reverse prior character-encoding
+damage or guarantee compatibility with every reader limitation.
+
+The optimizer cache version changes with this repair so older derivatives
+are not reused. No manual cache purge is required.
 
 ## Upgrade and rollback
 
