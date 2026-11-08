@@ -99,3 +99,16 @@ class DownloadPreparationTests(unittest.TestCase):
         self.source.write_bytes(b"not-an-epub")
         with self.assertRaises(OptimizationError):
             prepare_epub_download(self.source, self.destination)
+
+    def test_doctype_subset_is_preserved_and_adversarial_brackets_are_bounded(self):
+        from crosspoint_cwa_bridge.optimizer import _repair_charset_meta
+        doctype = b'<!DOCTYPE html [<!ENTITY sample "a]b">]>'
+        chapter = doctype + b'<html><head><meta charset="utf-8"></head><body/></html>'
+        fixed, count = _repair_charset_meta(chapter)
+        self.assertEqual(count, 1)
+        self.assertTrue(fixed.startswith(doctype))
+        # Previously this small malformed prefix caused exponential backtracking.
+        adversarial = b"<!doctype[" + b"][" * 100 + b"unfinished"
+        fixed, count = _repair_charset_meta(adversarial)
+        self.assertEqual(fixed, adversarial)
+        self.assertEqual(count, 0)
