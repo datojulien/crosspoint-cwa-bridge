@@ -226,3 +226,11 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(64 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def replace_epub_members(payload: bytes, replacements: dict[str, bytes]) -> bytes:
+    output = BytesIO()
+    with ZipFile(BytesIO(payload)) as source, ZipFile(output, "w") as target:
+        for info in source.infolist():
+            target.writestr(info, replacements.get(info.filename, source.read(info)))
+    return output.getvalue()
