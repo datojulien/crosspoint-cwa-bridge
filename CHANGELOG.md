@@ -5,6 +5,18 @@ All notable changes to this project are documented here. Versions follow
 
 ## [Unreleased]
 
+### Added
+
+- Remove chapter XHTML comments before parsing for X3/X4 downloads, including
+  manifest XHTML resources with nonstandard extensions and image-conversion
+  fallbacks, while preserving chapter text, CDATA, and processing instructions.
+- Strip unused embedded fonts, stylesheet and inline `@font-face` rules, OPF
+  font entries, and matching font-obfuscation records from X3/X4 optimized
+  derivatives; preserve unrelated assets and encryption metadata.
+- Advance the derivative cache version to `crosspoint-standard-v4` so existing
+  cached books are regenerated automatically. Original/KOReader profiles and
+  source EPUBs remain unchanged.
+
 ### Fixed
 
 - Canonicalize root-contained EPUB ZIP paths from metadata export and collapse

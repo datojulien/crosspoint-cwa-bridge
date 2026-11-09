@@ -234,3 +234,46 @@ def replace_epub_members(payload: bytes, replacements: dict[str, bytes]) -> byte
         for info in source.infolist():
             target.writestr(info, replacements.get(info.filename, source.read(info)))
     return output.getvalue()
+
+
+def cleanup_epub(*, chapter: bytes | None = None, encryption: bytes | None = None) -> bytes:
+    """A synthetic book with unused fonts, XML-named XHTML, and ordinary assets."""
+    files = {
+        "META-INF/container.xml": b'''<container><rootfiles><rootfile full-path="Book/content.opf"/></rootfiles></container>''',
+        "Book/content.opf": b'''<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="id">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">fixture</dc:identifier></metadata>
+<manifest><item id="chapter" href="text/chapter.xml" media-type="application/xhtml+xml"/>
+<item id="css" href="styles/main.css" media-type="text/css"/>
+<item id="font1" href="fonts/Type%20One.TTF" media-type="application/octet-stream"/>
+<item id="font2" href="fonts/./odd.bin" media-type="application/vnd.ms-opentype"/>
+<item id="font3" href="fonts/other.dat" media-type="FONT/WOFF2"/>
+<item id="asset" href="asset.bin" media-type="application/octet-stream"/></manifest>
+<spine><itemref idref="chapter"/></spine></package>''',
+        "Book/text/chapter.xml": chapter if chapter is not None else b'''<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Fixture</title>
+<style>@font-face{font-family:Unused;src:url('../fonts/Type%20One.TTF')} p{color:black}</style>
+</head><body><p>Before<!-- publisher boilerplate --> after.</p></body></html>''',
+        "Book/styles/main.css": b'''@font-face{font-family:Data;src:url("data:font/woff2;base64,AAAA")} p{margin:0}''',
+        "Book/fonts/Type One.TTF": b"synthetic font file",
+        "Book/fonts/odd.bin": b"synthetic OpenType file",
+        "Book/fonts/other.dat": b"synthetic WOFF2 file",
+        "Book/fonts/unlisted.OTF": b"unlisted font",
+        "Book/fonts/unlisted.woff": b"unlisted font",
+        "Book/fonts/unlisted.WOFF2": b"unlisted font",
+        "Book/fonts/unlisted.eot": b"unlisted font",
+        "Book/asset.bin": b"keep ordinary assets",
+    }
+    if encryption is not None:
+        files["META-INF/encryption.xml"] = encryption
+    output = BytesIO()
+    with ZipFile(output, "w") as archive:
+        archive.writestr("mimetype", b"application/epub+zip", compress_type=ZIP_STORED)
+        for name, data in files.items():
+            archive.writestr(name, data, compress_type=ZIP_DEFLATED)
+    return output.getvalue()
+
+
+FONT_ENCRYPTION = b'''<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"
+ xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+<enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+<enc:CipherData><enc:CipherReference URI="Book/fonts/Type%20One.TTF"/></enc:CipherData></enc:EncryptedData>
+</encryption>'''
