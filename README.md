@@ -12,6 +12,32 @@ This project is not affiliated with or endorsed by CrossPoint or
 Calibre-Web-Automated. Product names and trademarks belong to their respective
 owners.
 
+## Vibe coding and AI involvement
+
+**This is a vibe-coded project.** [@datojulien](https://github.com/datojulien) directs the work through
+prompts, and ChatGPT/Codex agents contribute substantial AI-generated and
+AI-edited code, tests, and documentation. Agents also investigate problems,
+operate development tools, and carry out merges and deployments when instructed
+by the maintainer.
+
+For example, during the 9 November 2026 update, a ChatGPT agent:
+
+- reviewed and fixed five dependency-update PRs, regenerated Python dependency
+  lock files, added checks for version mismatches, and merged the approved updates;
+- compared the bridge with upstream CrossPoint and implemented XHTML-comment
+  and embedded-font removal for both X3 and X4 in
+  [PR #14](https://github.com/datojulien/crosspoint-cwa-bridge/pull/14);
+- added regression coverage, ran the 102-test suite locally and in the Raspberry
+  Pi container, and checked Python 3.11/3.13, Docker, and CodeQL CI results; and
+- merged and deployed the approved change, checked service health and public
+  OPDS authentication challenges, and saved the previous image and configuration
+  with rollback instructions.
+
+These were automated tests and service checks; the agent did not verify an
+actual download or reading session on a physical X3 or X4 during that update.
+Upstream work and its authors remain credited in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## What it does
 
 Version 0.7.3 provides:
