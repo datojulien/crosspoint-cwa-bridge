@@ -3,6 +3,7 @@
 The behavior is adapted from CrossPoint Reader's MIT-licensed
 ``src/network/html/FilesPage.html`` at commit
 9b1fb712de83b87d518f6dc12a02977b6499bba2. See THIRD_PARTY_NOTICES.md.
+Comment and embedded-font cleanup follow upstream PRs #3028 and #3085.
 
 Advanced/manual policies (crop, split, and rotation) are intentionally absent.
 """
@@ -26,7 +27,7 @@ from lxml import etree
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 
-OPTIMIZER_VERSION = "crosspoint-standard-v3"
+OPTIMIZER_VERSION = "crosspoint-standard-v4"
 DEFAULT_JPEG_QUALITY = 85
 DEFAULT_MAX_IMAGE_PIXELS = 40_000_000
 DEFAULT_MAX_IMAGE_BYTES = 256 * 1024 * 1024
@@ -48,6 +49,11 @@ RENAMED_RASTER_EXTENSIONS = {".jpeg", ".png", ".gif", ".webp", ".bmp"}
 XHTML_EXTENSIONS = {".xhtml", ".html", ".htm"}
 XHTML_NS = "http://www.w3.org/1999/xhtml"
 XLINK_NS = "http://www.w3.org/1999/xlink"
+FONT_EXTENSIONS = {".ttf", ".otf", ".woff", ".woff2", ".eot"}
+FONT_MEDIA_TYPES = re.compile(
+    r"^(?:font/|application/(?:font-|x-font-|vnd\.ms-(?:opentype|fontobject)$))",
+    re.IGNORECASE,
+)
 
 
 class OptimizationError(RuntimeError):
@@ -321,6 +327,102 @@ def _repair_charset_meta(data: bytes) -> tuple[bytes, int]:
     return _XML_TOKENS.sub(replace, data), repairs
 
 
+def _strip_xhtml_comments(data: bytes) -> tuple[bytes, int]:
+    """Strip comments before parsing, preserving CDATA, PIs, and DTD literals."""
+    parts: list[bytes] = []
+    cursor = kept_from = count = 0
+    while cursor < len(data):
+        start = data.find(b"<", cursor)
+        if start < 0:
+            break
+        if data.startswith(b"<!--", start):
+            end = data.find(b"-->", start + 4)
+            if end < 0:
+                raise OptimizationError("XHTML contains an unterminated comment")
+            parts.append(data[kept_from:start])
+            cursor = kept_from = end + 3
+            count += 1
+            continue
+        closing = (
+            b"]]>" if data.startswith(b"<![CDATA[", start)
+            else b"?>" if data.startswith(b"<?", start) else None
+        )
+        if closing:
+            end = data.find(closing, start + 2)
+            cursor = len(data) if end < 0 else end + len(closing)
+            continue
+
+        # Skip markup as a whole: comment-like text inside quoted attributes
+        # or a DOCTYPE must remain available to the XML validator unchanged.
+        doctype = data[start:start + 9].upper() == b"<!DOCTYPE"
+        subset_depth = 0
+        quote_char = None
+        cursor = start + 1
+        while cursor < len(data):
+            char = data[cursor]
+            if quote_char is not None:
+                if char == quote_char:
+                    quote_char = None
+            elif doctype and data.startswith(b"<!--", cursor):
+                end = data.find(b"-->", cursor + 4)
+                if end < 0:
+                    cursor = len(data)
+                    break
+                cursor = end + 3
+                continue
+            elif doctype and data.startswith(b"<?", cursor):
+                end = data.find(b"?>", cursor + 2)
+                if end < 0:
+                    cursor = len(data)
+                    break
+                cursor = end + 2
+                continue
+            elif char in (ord('"'), ord("'")):
+                quote_char = char
+            elif doctype and char == ord("["):
+                subset_depth += 1
+            elif doctype and char == ord("]"):
+                subset_depth = max(0, subset_depth - 1)
+            elif char == ord(">") and not subset_depth:
+                cursor += 1
+                break
+            cursor += 1
+    if not count:
+        return data, 0
+    parts.append(data[kept_from:])
+    return b"".join(parts), count
+
+
+def _prepare_download_xhtml(data: bytes) -> tuple[bytes, int]:
+    fixed, repairs = _strip_xhtml_comments(data)
+    try:
+        _parse_download_xhtml(fixed)
+    except etree.XMLSyntaxError:
+        fixed, count = _repair_charset_meta(fixed)
+        repairs += count
+        try:
+            _parse_download_xhtml(fixed)
+        except etree.XMLSyntaxError as exc:
+            raise OptimizationError("EPUB XHTML cannot be safely repaired") from exc
+    return fixed, repairs
+
+
+def _xhtml_paths(
+    opf_path: str, opf: etree._Element, names: dict[str, ZipInfo],
+) -> set[str]:
+    documents = {
+        name for name in names if PurePosixPath(name).suffix.lower() in XHTML_EXTENSIONS
+    }
+    for item in (node for node in opf.iter() if _local_name(node) == "item"):
+        if item.get("media-type") != "application/xhtml+xml":
+            continue
+        reference = _archive_reference(opf_path, item.get("href", ""))
+        if not reference or reference not in names:
+            raise OptimizationError("EPUB XHTML resource is missing")
+        documents.add(reference)
+    return documents
+
+
 def _inspect_download_markup(
     archive: ZipFile, names: dict[str, ZipInfo], *, repair: bool,
     max_text_bytes: int = DEFAULT_MAX_TEXT_BYTES,
@@ -333,34 +435,22 @@ def _inspect_download_markup(
         )
     except etree.XMLSyntaxError as exc:
         raise OptimizationError("EPUB package is malformed") from exc
-    documents = {
-        name for name in names if PurePosixPath(name).suffix.lower() in XHTML_EXTENSIONS
-    }
-    for item in (node for node in opf.iter() if _local_name(node) == "item"):
-        if item.get("media-type") != "application/xhtml+xml":
-            continue
-        reference = _archive_reference(opf_path, item.get("href", ""))
-        if not reference or reference not in names:
-            raise OptimizationError("EPUB XHTML resource is missing")
-        documents.add(reference)
+    documents = _xhtml_paths(opf_path, opf, names)
 
     changes: set[str] = set()
     repairs = 0
     for name in sorted(documents):
         data = _read_limited(archive, names[name], max_text_bytes, "XHTML document")
-        try:
-            _parse_download_xhtml(data)
-            continue
-        except etree.XMLSyntaxError as exc:
-            if not repair:
+        if repair:
+            fixed, count = _prepare_download_xhtml(data)
+            if fixed != data:
+                changes.add(name)
+                repairs += count
+        else:
+            try:
+                _parse_download_xhtml(data)
+            except etree.XMLSyntaxError as exc:
                 raise OptimizationError("EPUB XHTML is malformed") from exc
-        fixed, count = _repair_charset_meta(data)
-        try:
-            _parse_download_xhtml(fixed)
-        except etree.XMLSyntaxError as exc:
-            raise OptimizationError("EPUB XHTML cannot be safely repaired") from exc
-        changes.add(name)
-        repairs += count
     return changes, repairs
 
 
@@ -416,7 +506,7 @@ def prepare_epub_download(
                         data = _read_limited(
                             archive, info, DEFAULT_MAX_TEXT_BYTES, "XHTML document"
                         )
-                        fixed, _ = _repair_charset_meta(data)
+                        fixed, _ = _prepare_download_xhtml(data)
                         _write_bytes(output, info, name, fixed, info.compress_type)
                     else:
                         _stream_copy(
@@ -502,9 +592,160 @@ def _rewrite_style_urls(
     return pattern.sub(replace, value), count
 
 
+def _css_token_end(css: str, start: int) -> int:
+    """Skip a CSS string, escape, or comment without interpreting its contents."""
+    if css.startswith("/*", start):
+        end = css.find("*/", start + 2)
+        return len(css) if end < 0 else end + 2
+    if css[start] == "\\":
+        return min(len(css), start + 2)
+    quote_char = css[start]
+    end = start + 1
+    while end < len(css):
+        if css[end] == "\\":
+            end += 2
+        elif css[end] == quote_char:
+            return end + 1
+        else:
+            end += 1
+    return len(css)
+
+
+def _strip_font_face_rules(css: str) -> tuple[str, int]:
+    """Remove complete font rules, respecting strings, comments and nested blocks."""
+    parts: list[str] = []
+    cursor = kept_from = count = parens = 0
+    custom_depth = -1
+    statement_start = True
+    while cursor < len(css):
+        char = css[cursor]
+        if char in "\"'\\" or css.startswith("/*", cursor):
+            if not css.startswith("/*", cursor):
+                statement_start = False
+            cursor = _css_token_end(css, cursor)
+            continue
+        if statement_start and css.startswith("--", cursor):
+            custom_depth = 0
+        if statement_start and custom_depth < 0 and not parens and css[cursor:cursor + 10].lower() == "@font-face":
+            opening = cursor + 10
+            while opening < len(css):
+                if css[opening].isspace():
+                    opening += 1
+                elif css.startswith("/*", opening):
+                    opening = _css_token_end(css, opening)
+                else:
+                    break
+            if opening < len(css) and css[opening] == "{":
+                end = opening + 1
+                depth = 1
+                rule_parens = 0
+                while end < len(css) and depth:
+                    if css[end] in "\"'\\" or css.startswith("/*", end):
+                        end = _css_token_end(css, end)
+                        continue
+                    if css[end] == "(":
+                        rule_parens += 1
+                    elif css[end] == ")":
+                        rule_parens = max(0, rule_parens - 1)
+                    elif not rule_parens and css[end] == "{":
+                        depth += 1
+                    elif not rule_parens and css[end] == "}":
+                        depth -= 1
+                    end += 1
+                if not depth:
+                    parts.append(css[kept_from:cursor])
+                    cursor = kept_from = end
+                    count += 1
+                    continue
+                # An incomplete rule has no safe removal boundary.
+                break
+        if char == "(":
+            parens += 1
+        elif char == ")":
+            parens = max(0, parens - 1)
+        if custom_depth >= 0:
+            # Custom-property values can contain literal blocks and at-keywords.
+            statement_start = False
+            if not parens:
+                if char == "{":
+                    custom_depth += 1
+                elif char == "}" and custom_depth:
+                    custom_depth -= 1
+                elif char in ";}" and not custom_depth:
+                    custom_depth = -1
+                    statement_start = True
+        elif not parens and char in "{};":
+            statement_start = True
+        elif not char.isspace():
+            statement_start = False
+        cursor += 1
+    if not count:
+        return css, 0
+    parts.append(css[kept_from:])
+    return "".join(parts), count
+
+
+def _font_paths(
+    opf_path: str, opf: etree._Element, names: dict[str, ZipInfo],
+) -> set[str]:
+    paths = {
+        name for name in names if PurePosixPath(name).suffix.lower() in FONT_EXTENSIONS
+    }
+    for item in (node for node in opf.iter() if _local_name(node) == "item"):
+        if FONT_MEDIA_TYPES.match(item.get("media-type", "")):
+            path = _archive_reference(opf_path, item.get("href", ""))
+            if path in names:
+                paths.add(path)
+    return paths
+
+
+def _strip_font_encryption(
+    content: bytes, font_paths: set[str], counters: _Counters,
+) -> bytes | None:
+    """Remove only encryption records for discarded fonts; retain other records."""
+    try:
+        root = etree.fromstring(content, parser=_xml_parser())
+    except etree.XMLSyntaxError:
+        # Unknown/malformed metadata cannot safely be rewritten.
+        return content
+    removed = 0
+    for entry in list(root.iter()):
+        if _local_name(entry) != "EncryptedData":
+            continue
+        references = [
+            node.get("URI", "") for node in entry.iter()
+            if _local_name(node) == "CipherReference"
+        ]
+        if references and all(
+            _archive_reference("", uri) in font_paths for uri in references
+        ):
+            parent = entry.getparent()
+            if parent is not None:
+                if entry.tail:
+                    previous = entry.getprevious()
+                    if previous is None:
+                        parent.text = (parent.text or "") + entry.tail
+                    else:
+                        previous.tail = (previous.tail or "") + entry.tail
+                parent.remove(entry)
+                removed += 1
+    if not removed:
+        return content
+    counters.repairs += removed
+    if not root.attrib and not (root.text or "").strip() and not len(root):
+        return None
+    return etree.tostring(
+        root, encoding="utf-8", xml_declaration=True,
+        doctype=root.getroottree().docinfo.doctype or None,
+    )
+
+
 def _transform_xhtml(
     path: str, content: str, renamed: dict[str, str], counters: _Counters
 ) -> bytes:
+    stripped, count = _strip_xhtml_comments(content.encode("utf-8"))
+    content = stripped.decode("utf-8")
+    counters.repairs += count
     original = content
     had_declaration = bool(re.match(r"\s*<\?xml\b", content))
     content = _replace_html_named_entities(content)
@@ -560,6 +801,9 @@ def _transform_xhtml(
                 if dimension in element.attrib:
                     element.attrib.pop(dimension)
                     counters.repairs += 1
+        if _local_name(element) == "style" and element.text:
+            element.text, count = _strip_font_face_rules(element.text)
+            counters.repairs += count
 
         for attribute in ("src", "href", f"{{{XLINK_NS}}}href"):
             value = element.get(attribute)
@@ -653,7 +897,8 @@ def _extract_identifier(root: etree._Element) -> str | None:
 
 
 def _transform_opf(
-    path: str, content: str, renamed: dict[str, str], counters: _Counters
+    path: str, content: str, renamed: dict[str, str], counters: _Counters,
+    *, font_paths: set[str],
 ) -> tuple[bytes, str | None]:
     had_declaration = bool(re.match(r"\s*<\?xml\b", content))
     try:
@@ -661,10 +906,14 @@ def _transform_opf(
     except etree.XMLSyntaxError as exc:
         raise OptimizationError("cannot safely parse the OPF package") from exc
 
-    for item in (node for node in root.iter() if _local_name(node) == "item"):
+    for item in [node for node in root.iter() if _local_name(node) == "item"]:
         href = item.get("href")
         if href:
             resolved = _archive_reference(path, href)
+            if resolved in font_paths:
+                item.getparent().remove(item)
+                counters.repairs += 1
+                continue
             rewritten, changed = _rewrite_reference(path, href, renamed)
             if changed:
                 item.set("href", rewritten)
@@ -741,6 +990,8 @@ def _transform_ncx(
 def _transform_css(
     path: str, content: str, renamed: dict[str, str], counters: _Counters
 ) -> bytes:
+    content, count = _strip_font_face_rules(content)
+    counters.repairs += count
     transformed, changes = _rewrite_style_urls(path, content, renamed)
     counters.repairs += changes
     return transformed.encode("utf-8")
@@ -983,8 +1234,14 @@ def optimize_epub(
             opf_text = _decode_text(
                 _read_limited(source, names[opf_path], max_text_bytes, "OPF package")
             )
+            try:
+                opf = etree.fromstring(opf_text.encode("utf-8"), parser=_xml_parser())
+            except etree.XMLSyntaxError as exc:
+                raise OptimizationError("cannot safely parse the OPF package") from exc
+            documents = _xhtml_paths(opf_path, opf, names)
+            font_paths = _font_paths(opf_path, opf, names)
             opf_bytes, main_identifier = _transform_opf(
-                opf_path, opf_text, renamed, counters
+                opf_path, opf_text, renamed, counters, font_paths=font_paths,
             )
 
             with tempfile.TemporaryDirectory(
@@ -1006,6 +1263,9 @@ def optimize_epub(
                     for name, info in names.items():
                         if name == "mimetype":
                             continue
+                        if name in font_paths:
+                            counters.repairs += 1
+                            continue
                         suffix = PurePosixPath(name).suffix.lower()
                         if suffix in SUPPORTED_RASTER_EXTENSIONS:
                             _process_image(
@@ -1022,7 +1282,7 @@ def optimize_epub(
                             counters.images += 1
                         elif name == opf_path:
                             _write_bytes(output, info, name, opf_bytes, ZIP_DEFLATED)
-                        elif suffix in XHTML_EXTENSIONS:
+                        elif name in documents:
                             text = _decode_text(
                                 _read_limited(
                                     source, info, max_text_bytes, "XHTML document"
@@ -1044,6 +1304,13 @@ def optimize_epub(
                                 name, text, renamed, main_identifier, counters
                             )
                             _write_bytes(output, info, name, data, ZIP_DEFLATED)
+                        elif name == "META-INF/encryption.xml" and font_paths:
+                            data = _read_limited(
+                                source, info, max_text_bytes, "encryption metadata"
+                            )
+                            data = _strip_font_encryption(data, font_paths, counters)
+                            if data is not None:
+                                _write_bytes(output, info, name, data, ZIP_DEFLATED)
                         else:
                             _stream_copy(
                                 source, output, info, compression=ZIP_DEFLATED, filename=name

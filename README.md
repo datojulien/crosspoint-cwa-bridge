@@ -136,15 +136,23 @@ fixer, then optimizes and caches the corrected derivative. Calibre's library
 file is left intact. Internal ZIP dot segments are canonicalized, and byte-identical
 aliases are collapsed. Root escapes and conflicting aliases remain rejected.
 
+For both X3 and X4, chapter comments are removed before XML parsing to avoid
+large publisher/Word-export comments consuming reader memory. Optimized
+derivatives also omit embedded font files (including fonts identified by OPF
+media type), remove `@font-face` rules from stylesheets and inline style blocks,
+and clean up the corresponding manifest and font-obfuscation records. CrossPoint
+uses its built-in or SD-card fonts. Other encryption records are retained.
+
 If image optimization fails, the bridge serves the validated source or the
-minimally repaired copy. It returns HTTP 502 for markup it cannot safely
-repair, and HTTP 413 for EPUBs beyond the processing limit, before sending
+minimally repaired copy, retaining chapter comment removal; font removal applies
+to successfully optimized derivatives. It returns HTTP 502 for markup it cannot
+safely repair, and HTTP 413 for EPUBs beyond the processing limit, before sending
 EPUB bytes. Original/KOReader profiles retain byte-identical passthrough.
 This repair closes charset tags; it does not reverse prior character-encoding
 damage or guarantee compatibility with every reader limitation.
 
-The optimizer cache version changes with this repair so older derivatives
-are not reused. No manual cache purge is required.
+The optimizer cache version advances to `crosspoint-standard-v4` with this
+cleanup so older derivatives are not reused. No manual cache purge is required.
 
 ## Upgrade and rollback
 
@@ -190,4 +198,7 @@ license are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 Pinned compatibility references:
 
 - CrossPoint Reader `develop`: `9b1fb712de83b87d518f6dc12a02977b6499bba2`;
+- CrossPoint Reader `2.0.0`: XHTML-comment and embedded-font cleanup
+  ([#3028](https://github.com/crosspoint-reader/crosspoint-reader/pull/3028),
+  [#3085](https://github.com/crosspoint-reader/crosspoint-reader/pull/3085));
 - CWA `v4.0.6`: `1b80f9a74b3db1fe9b35978e38d2e62fcb6a7246`.

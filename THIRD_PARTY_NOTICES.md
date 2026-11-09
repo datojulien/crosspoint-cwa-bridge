@@ -8,6 +8,11 @@ the Standard Optimize pipeline in CrossPoint Reader's
 `src/network/html/FilesPage.html`, referenced at commit
 `9b1fb712de83b87d518f6dc12a02977b6499bba2`.
 
+XHTML-comment removal and embedded-font cleanup additionally adapt the behavior
+of upstream [PR #3028](https://github.com/crosspoint-reader/crosspoint-reader/pull/3028)
+and [PR #3085](https://github.com/crosspoint-reader/crosspoint-reader/pull/3085),
+included in CrossPoint Reader `2.0.0`'s `src/network/html/js/epub-optimizer.js`.
+
 CrossPoint Reader is distributed under the following MIT license:
 
 > MIT License

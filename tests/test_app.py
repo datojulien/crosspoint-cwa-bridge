@@ -25,7 +25,9 @@ from crosspoint_cwa_bridge.optimizer import (
     OptimizationResult,
     optimize_epub as real_optimize_epub,
 )
-from fixture_factory import create_synthetic_epub, replace_epub_members
+from fixture_factory import (
+    FONT_ENCRYPTION, cleanup_epub, create_synthetic_epub, replace_epub_members,
+)
 
 
 AUTHORIZATION = "Basic dGVzdC11c2VyOnN1cGVyLXNlY3JldA=="
@@ -724,6 +726,43 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                     again = await self.bridge_client.get(f"/opds/crosspoint/{profile}/download/1/epub/")
                     self.assertEqual(again.status, 200)
                     self.assertEqual(await again.read(), payload)
+
+    async def test_font_comment_cleanup_downloads_and_cache_for_both_profiles(self):
+        self.synthetic_epub = cleanup_epub(encryption=FONT_ENCRYPTION)
+        for profile in ("x3", "x4"):
+            with self.subTest(profile=profile):
+                route = f"/opds/crosspoint/{profile}/download/1/epub/"
+                response = await self.bridge_client.get(route)
+                self.assertEqual(response.status, 200)
+                payload = await response.read()
+                with ZipFile(io.BytesIO(payload)) as archive:
+                    self.assertFalse(any("/fonts/" in name for name in archive.namelist()))
+                    chapter = archive.read("Book/text/chapter.xml")
+                    self.assertNotIn(b"<!--", chapter)
+                    self.assertNotIn(b"@font-face", chapter)
+                with patch("crosspoint_cwa_bridge.app.optimize_epub", side_effect=AssertionError("cache must be reused")):
+                    cached = await self.bridge_client.get(route)
+                    self.assertEqual(cached.status, 200)
+                    self.assertEqual(await cached.read(), payload)
+        response = await self.bridge_client.get("/opds/crosspoint/original/download/1/epub/")
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.read(), self.synthetic_epub)
+
+    async def test_image_failure_retains_comment_cleanup_for_both_profiles(self):
+        self.synthetic_epub = cleanup_epub()
+        with patch("crosspoint_cwa_bridge.app.optimize_epub", side_effect=RuntimeError("image conversion failed")):
+            for profile in ("x3", "x4"):
+                with self.subTest(profile=profile):
+                    response = await self.bridge_client.get(f"/opds/crosspoint/{profile}/download/1/epub/")
+                    self.assertEqual(response.status, 200)
+                    payload = await response.read()
+                    self.assertNotEqual(payload, self.synthetic_epub)
+                    self.assertNotIn("ETag", response.headers)
+                    with ZipFile(io.BytesIO(payload)) as archive:
+                        chapter = archive.read("Book/text/chapter.xml")
+                        self.assertNotIn(b"<!--", chapter)
+                        self.assertIn(b"Before after.", chapter)
+        self.assertFalse(list(self.cache_dir.rglob("*.epub")))
 
     async def test_unrepairable_markup_is_not_sent_as_fallback(self):
         self.synthetic_epub = replace_epub_members(self.synthetic_epub, {

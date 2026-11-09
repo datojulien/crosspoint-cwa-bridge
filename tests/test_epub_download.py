@@ -56,17 +56,17 @@ class DownloadPreparationTests(unittest.TestCase):
         self.assertEqual(second, path)
         self.assertEqual(count, 0)
 
-    def test_comments_cdata_and_quoted_angle_brackets_are_preserved(self):
+    def test_comments_are_removed_while_cdata_and_quoted_angles_are_preserved(self):
         chapter = b'''<html><head><!-- <meta charset="utf-8"> -->
 <script><![CDATA[<meta charset="utf-8">]]></script>
 <meta data-example="a > b" charset='utf-8'></head><body/></html>'''
         self.set_chapter(chapter)
         path, repairs = prepare_epub_download(self.source, self.destination)
-        self.assertEqual(repairs, 1)
+        self.assertEqual(repairs, 2)
         with ZipFile(path) as prepared:
-            self.assertEqual(prepared.read("OEBPS/text/chapter.xhtml"), chapter.replace(
-                b"charset='utf-8'>", b"charset='utf-8'/>"
-            ))
+            expected = chapter.replace(b'<!-- <meta charset="utf-8"> -->', b"")
+            expected = expected.replace(b"charset='utf-8'>", b"charset='utf-8'/>")
+            self.assertEqual(prepared.read("OEBPS/text/chapter.xhtml"), expected)
 
     def test_valid_explicit_meta_closing_tag_is_unchanged(self):
         self.set_chapter(b'<html><head><meta charset="utf-8"></meta></head><body/></html>')
