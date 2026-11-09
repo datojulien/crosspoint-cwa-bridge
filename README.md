@@ -18,12 +18,12 @@ owners.
 prompts, and ChatGPT/Codex agents contribute substantial AI-generated and
 AI-edited code, tests, and documentation. Agents also investigate problems,
 operate development tools, and carry out merges and deployments when instructed
-by the maintainer. AI involvement goes well beyond autocomplete or proofreading.
+by the maintainer.
 
 For example, during the 9 November 2026 update, a ChatGPT agent:
 
-- reviewed and fixed five dependency-update PRs, regenerated their hashed lock
-  files, added checks for dependency mismatches, and merged the approved updates;
+- reviewed and fixed five dependency-update PRs, regenerated Python dependency
+  lock files, added checks for version mismatches, and merged the approved updates;
 - compared the bridge with upstream CrossPoint and implemented XHTML-comment
   and embedded-font removal for both X3 and X4 in
   [PR #14](https://github.com/datojulien/crosspoint-cwa-bridge/pull/14);
