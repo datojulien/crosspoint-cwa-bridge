@@ -9,7 +9,8 @@ COPY pyproject.toml README.md LICENSE THIRD_PARTY_NOTICES.md requirements.lock .
 COPY src ./src
 
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
-    && pip install --no-cache-dir --no-deps --no-build-isolation .
+    && pip install --no-cache-dir --no-deps --no-build-isolation . \
+    && pip check
 
 EXPOSE 8094 8095
 
