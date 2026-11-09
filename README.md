@@ -14,7 +14,7 @@ owners.
 
 ## Vibe coding and AI involvement
 
-**This is a vibe-coded project.** Julien Pierre directs the work through
+**This is a vibe-coded project.** [@datojulien](https://github.com/datojulien) directs the work through
 prompts, and ChatGPT/Codex agents contribute substantial AI-generated and
 AI-edited code, tests, and documentation. Agents also investigate problems,
 operate development tools, and carry out merges and deployments when instructed
