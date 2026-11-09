@@ -119,7 +119,7 @@ class PortalTests(unittest.IsolatedAsyncioTestCase):
         with patch("crosspoint_cwa_bridge.runtime.time", FreshHostClock):
             status = await self.public_client.get("/api/status")
         payload = await status.json()
-        self.assertEqual(payload["version"], "0.7.1")
+        self.assertEqual(payload["version"], "0.7.3")
         self.assertEqual(payload["cwa"]["state"], "reachable")
         self.assertEqual(set(payload["cache"]), {"x3", "x4"})
         serialized = json.dumps(payload)
