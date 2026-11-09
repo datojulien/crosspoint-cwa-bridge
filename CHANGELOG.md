@@ -3,6 +3,31 @@
 All notable changes to this project are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Canonicalize root-contained EPUB ZIP paths from metadata export and collapse
+  byte-identical aliases without accepting root escapes or conflicting contents.
+
+## [0.7.3] - 2026-10-06
+
+### Fixed
+
+- Validate X3/X4 EPUB ZIP checksums and chapter XHTML before streaming.
+- Repair unclosed charset meta tags introduced by CWA's Kindle EPUB fixer,
+  including XHTML manifest resources with an `.xml` extension.
+- Preserve repairs when image optimization falls back, and reject unrepairable
+  EPUBs or processing-limit bypasses before sending EPUB bytes.
+- Validate cached derivative XHTML and advance the optimizer cache version.
+
+## [0.7.2] - 2026-08-26
+
+### Added
+
+- Added `/opds/koreader` as a direct authenticated alias for the byte-identical
+  original EPUB profile.
+
 ## [0.7.1] - 2026-08-13
 
 ### Security
@@ -53,8 +78,10 @@ All notable changes to this project are documented here. Versions follow
 
 - Completed OPDS/OpenSearch rewriting and encoded-path compatibility.
 
-[0.7.0]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.7.0
+[0.7.3]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.7.3
+[0.7.2]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.7.2
 [0.7.1]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.7.1
+[0.7.0]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.7.0
 [0.6.1]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.6.1
 [0.6.0]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.6.0
 [0.5.0]: https://github.com/datojulien/crosspoint-cwa-bridge/releases/tag/v0.5.0

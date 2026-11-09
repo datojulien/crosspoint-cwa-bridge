@@ -25,7 +25,7 @@ from crosspoint_cwa_bridge.optimizer import (
     OptimizationResult,
     optimize_epub as real_optimize_epub,
 )
-from fixture_factory import create_synthetic_epub
+from fixture_factory import create_synthetic_epub, replace_epub_members
 
 
 AUTHORIZATION = "Basic dGVzdC11c2VyOnN1cGVyLXNlY3JldA=="
@@ -288,7 +288,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         payload = await response.json()
         self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["version"], "0.7.1")
+        self.assertEqual(payload["version"], "0.7.3")
         self.assertEqual(payload["optimizer_version"], OPTIMIZER_VERSION)
         self.assertEqual(payload["cache_schema_version"], CACHE_SCHEMA_VERSION)
 
@@ -322,8 +322,14 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(self.requests), 1)
 
-    async def test_short_x3_x4_aliases_serve_profiles_without_redirecting(self):
-        aliases = (("X3", "x3"), ("X4", "x4"), ("x3", "x3"), ("x4", "x4"))
+    async def test_short_profile_aliases_serve_profiles_without_redirecting(self):
+        aliases = (
+            ("X3", "x3"),
+            ("X4", "x4"),
+            ("x3", "x3"),
+            ("x4", "x4"),
+            ("koreader", "original"),
+        )
         for alias, expected_profile in aliases:
             with self.subTest(alias=alias):
                 response = await self.bridge_client.get(
@@ -338,12 +344,15 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                 hrefs = root.xpath("//*[local-name()='link']/@href")
                 self.assertIn(f"/opds/crosspoint/{expected_profile}/books", hrefs)
 
-        unauthorized = await self.bridge_client.get("/opds/X3", allow_redirects=False)
-        self.assertEqual(unauthorized.status, 401)
-        self.assertEqual(
-            unauthorized.headers["WWW-Authenticate"],
-            'Basic realm="Authentication Required"',
-        )
+        for alias in ("X3", "koreader"):
+            unauthorized = await self.bridge_client.get(
+                f"/opds/{alias}", allow_redirects=False
+            )
+            self.assertEqual(unauthorized.status, 401)
+            self.assertEqual(
+                unauthorized.headers["WWW-Authenticate"],
+                'Basic realm="Authentication Required"',
+            )
         missing = await self.bridge_client.get("/opds/X5", allow_redirects=False)
         self.assertEqual(missing.status, 404)
 
@@ -667,15 +676,99 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.close()
 
-    async def test_optimizer_failure_falls_back_to_original_epub(self):
+    async def test_invalid_epub_is_rejected_before_download(self):
         response = await self.bridge_client.get(
             "/opds/crosspoint/x3/download/2/epub/",
             headers={"Authorization": AUTHORIZATION},
         )
-        self.assertEqual(response.status, 200)
-        self.assertEqual(await response.read(), b"not-a-valid-epub")
-        self.assertEqual(response.headers["Content-Type"], "application/epub+zip")
+        self.assertEqual(response.status, 502)
+        self.assertEqual(await response.text(), "EPUB failed validation and could not be safely repaired\n")
         self.assertFalse(list(self.cache_dir.rglob("*.epub")))
+
+    async def test_charset_damage_is_repaired_and_cached_for_both_devices(self):
+        chapter = b'<html><head><meta charset="utf-8"></head><body><p>Fixture</p></body></html>'
+        self.synthetic_epub = replace_epub_members(self.synthetic_epub, {
+            "OEBPS/text/chapter.xhtml": chapter,
+        })
+        for profile in ("x3", "x4"):
+            with self.subTest(profile=profile):
+                first = await self.bridge_client.get(f"/opds/crosspoint/{profile}/download/1/epub/")
+                self.assertEqual(first.status, 200)
+                payload = await first.read()
+                with ZipFile(io.BytesIO(payload)) as archive:
+                    etree.fromstring(archive.read("OEBPS/text/chapter.xhtml"))
+                with patch("crosspoint_cwa_bridge.app.prepare_epub_download", side_effect=AssertionError("cache must be reused")):
+                    again = await self.bridge_client.get(f"/opds/crosspoint/{profile}/download/1/epub/")
+                    self.assertEqual(again.status, 200)
+                    self.assertEqual(await again.read(), payload)
+        self.assertEqual(len(list(self.cache_dir.rglob("*.epub"))), 2)
+
+    async def test_exported_cover_alias_downloads_and_cache_are_valid(self):
+        with ZipFile(io.BytesIO(self.synthetic_epub)) as archive:
+            cover = archive.read("OEBPS/images/photo.jpg")
+        stream = io.BytesIO(self.synthetic_epub)
+        with ZipFile(stream, "a") as archive:
+            archive.writestr("cover.jpg", cover)
+            archive.writestr("OPS/../cover.jpg", cover)
+        self.synthetic_epub = stream.getvalue()
+        for profile in ("x3", "x4"):
+            with self.subTest(profile=profile):
+                response = await self.bridge_client.get(f"/opds/crosspoint/{profile}/download/1/epub/")
+                self.assertEqual(response.status, 200)
+                payload = await response.read()
+                with ZipFile(io.BytesIO(payload)) as archive:
+                    self.assertEqual(archive.namelist().count("cover.jpg"), 1)
+                    self.assertNotIn("OPS/../cover.jpg", archive.namelist())
+                    self.assertIsNone(archive.testzip())
+                with patch("crosspoint_cwa_bridge.app.prepare_epub_download", side_effect=AssertionError("cache must be reused")):
+                    again = await self.bridge_client.get(f"/opds/crosspoint/{profile}/download/1/epub/")
+                    self.assertEqual(again.status, 200)
+                    self.assertEqual(await again.read(), payload)
+
+    async def test_unrepairable_markup_is_not_sent_as_fallback(self):
+        self.synthetic_epub = replace_epub_members(self.synthetic_epub, {
+            "OEBPS/text/chapter.xhtml": b"<html><head/><body><p>Broken</body></html>",
+        })
+        response = await self.bridge_client.get("/opds/crosspoint/x3/download/1/epub/")
+        self.assertEqual(response.status, 502)
+        self.assertNotIn(b"<html>", await response.read())
+        self.assertFalse(list(self.cache_dir.rglob("*.epub")))
+
+    async def test_optimizer_failure_still_serves_a_valid_original(self):
+        with patch("crosspoint_cwa_bridge.app.optimize_epub", side_effect=RuntimeError("image conversion failed")):
+            response = await self.bridge_client.get("/opds/crosspoint/x3/download/1/epub/")
+            self.assertEqual(response.status, 200)
+            self.assertEqual(await response.read(), self.synthetic_epub)
+
+    async def test_optimizer_failure_serves_repaired_markup_instead_of_broken_source(self):
+        chapter = b'<html><head><meta charset="utf-8"></head><body/></html>'
+        self.synthetic_epub = replace_epub_members(self.synthetic_epub, {
+            "OEBPS/text/chapter.xhtml": chapter,
+        })
+        with patch("crosspoint_cwa_bridge.app.optimize_epub", side_effect=RuntimeError("image conversion failed")):
+            response = await self.bridge_client.get("/opds/crosspoint/x3/download/1/epub/")
+            self.assertEqual(response.status, 200)
+            payload = await response.read()
+        self.assertNotEqual(payload, self.synthetic_epub)
+        self.assertNotIn("ETag", response.headers)
+        self.assertEqual(response.headers["Content-Length"], str(len(payload)))
+        with ZipFile(io.BytesIO(payload)) as archive:
+            self.assertEqual(archive.read("OEBPS/text/chapter.xhtml"), chapter.replace(b'"utf-8">', b'"utf-8"/>'))
+
+    async def test_oversized_epub_cannot_bypass_validation(self):
+        settings = Settings(
+            upstream_url=URL(str(self.upstream_server.make_url("/"))),
+            optimizer_max_epub_bytes=1,
+            admin_state_dir=Path(self.fixture_temp.name) / "limit-state",
+        )
+        client = TestClient(TestServer(create_app(settings)))
+        await client.start_server()
+        try:
+            response = await client.get("/opds/crosspoint/x3/download/1/epub/")
+            self.assertEqual(response.status, 413)
+            self.assertNotEqual(await response.read(), self.synthetic_epub)
+        finally:
+            await client.close()
 
     async def test_non_epub_acquisition_is_proxied_unchanged(self):
         response = await self.bridge_client.get(

@@ -61,6 +61,8 @@ _ACTIVITY_EVENTS = {
     "cache_miss",
     "cache_store",
     "cache_store_failed",
+    "epub_markup_repaired",
+    "epub_validation_failed",
     "feed_rewrite_failed",
     "feed_rewritten",
     "optimizer_complete",

@@ -37,7 +37,10 @@ from .feeds import (
     rewrite_feed,
 )
 from .logging_config import configure_logging
-from .optimizer import OPTIMIZER_VERSION, OptimizationResult, optimize_epub
+from .optimizer import (
+    OPTIMIZER_VERSION, OptimizationError, OptimizationResult, optimize_epub,
+    prepare_epub_download,
+)
 from .portal import (
     RUNTIME_KEY,
     add_public_routes,
@@ -305,13 +308,16 @@ async def _optimized_epub_response(
             _log_event(
                 request,
                 logging.WARNING,
-                "optimizer_fallback",
+                "epub_validation_failed",
                 profile=profile,
-                status=upstream.status,
+                status=413,
                 fallback_reason="source_size_limit",
                 original_bytes=int(advertised_size),
             )
-            return await _stream_upstream_response(request, upstream, headers=headers)
+            raise web.HTTPRequestEntityTooLarge(
+                max_size=settings.optimizer_max_epub_bytes,
+                actual_size=int(advertised_size),
+            )
 
     cache_key: str | None = None
     source_identity = str(upstream_url)
@@ -436,11 +442,29 @@ async def _optimized_epub_response(
                     status=upstream.status,
                     original_bytes=received,
                 )
+                try:
+                    prepared_path, markup_repairs = await asyncio.to_thread(
+                        prepare_epub_download, source_path, temp_dir / "repaired.epub"
+                    )
+                except OptimizationError as exc:
+                    _log_event(
+                        request, logging.WARNING, "epub_validation_failed",
+                        profile=profile, status=502,
+                        fallback_reason=type(exc).__name__,
+                    )
+                    raise web.HTTPBadGateway(
+                        text="EPUB failed validation and could not be safely repaired\n"
+                    ) from exc
+                if markup_repairs:
+                    _log_event(
+                        request, logging.INFO, "epub_markup_repaired",
+                        profile=profile, repair_count=markup_repairs,
+                    )
                 request.app[RUNTIME_KEY].begin_conversion(profile)
                 try:
                     result: OptimizationResult = await asyncio.to_thread(
                         optimize_epub,
-                        source_path,
+                        prepared_path,
                         derivative_path,
                         profile=profile,
                         quality=settings.optimizer_jpeg_quality,
@@ -457,9 +481,11 @@ async def _optimized_epub_response(
                         original_bytes=received,
                         fallback_reason=type(exc).__name__,
                     )
-                    derivative_headers = headers.copy()
+                    derivative_headers = (
+                        _derivative_headers(headers) if markup_repairs else headers.copy()
+                    )
                     derivative_headers["Cache-Control"] = "private, no-store"
-                    response_stream = source_path.open("rb")
+                    response_stream = prepared_path.open("rb")
                 else:
                     _log_event(
                         request,
@@ -468,11 +494,11 @@ async def _optimized_epub_response(
                         profile=profile,
                         status=upstream.status,
                         duration_ms=round(result.duration_seconds * 1000),
-                        original_bytes=result.source_bytes,
+                        original_bytes=received,
                         output_bytes=result.output_bytes,
                         savings_percent=round(result.savings_percent, 1),
                         image_count=result.image_count,
-                        repair_count=result.repair_count,
+                        repair_count=result.repair_count + markup_repairs,
                     )
                     response_stream = derivative_path.open("rb")
                     try:
@@ -481,7 +507,7 @@ async def _optimized_epub_response(
                             cache_key,
                             profile=profile,
                             derivative_path=derivative_path,
-                            original_bytes=result.source_bytes,
+                            original_bytes=received,
                         )
                     except Exception as exc:
                         _log_event(
@@ -547,15 +573,16 @@ async def proxy_opds(request: web.Request) -> web.StreamResponse:
 
 
 async def profile_alias(request: web.Request) -> web.StreamResponse:
-    """Serve a direct X3/X4 root feed without redirecting the OPDS client."""
+    """Serve a direct profile root feed without redirecting the OPDS client."""
 
-    requested_profile = request.match_info["profile_alias"]
+    requested_alias = request.match_info["profile_alias"]
+    profile = "original" if requested_alias == "koreader" else requested_alias.lower()
     return await _proxy_opds_request(
         request,
-        profile=requested_profile.lower(),
+        profile=profile,
         tail="",
         optimize_epub_request=False,
-        bridge_prefix=f"/opds/{requested_profile}",
+        bridge_prefix=f"/opds/{requested_alias}",
     )
 
 
@@ -730,9 +757,15 @@ def create_app(
     app.router.add_get("/opds", profile_feed)
     app.router.add_get("/opds/", profile_feed)
     for method in ("GET", "HEAD"):
-        app.router.add_route(method, "/opds/{profile_alias:X3|X4|x3|x4}", profile_alias)
         app.router.add_route(
-            method, "/opds/{profile_alias:X3|X4|x3|x4}/", profile_alias
+            method,
+            "/opds/{profile_alias:X3|X4|x3|x4|koreader}",
+            profile_alias,
+        )
+        app.router.add_route(
+            method,
+            "/opds/{profile_alias:X3|X4|x3|x4|koreader}/",
+            profile_alias,
         )
         app.router.add_route(
             method, "/opds/crosspoint/{profile:x3|x4|original}", proxy_opds
