@@ -35,6 +35,7 @@ from .feeds import (
     build_profile_feed,
     rewrite_cwa_href,
     rewrite_feed,
+    split_compact_page_query,
 )
 from .logging_config import configure_logging
 from .optimizer import (
@@ -595,12 +596,19 @@ async def _proxy_opds_request(
     bridge_prefix: str | None = None,
 ) -> web.StreamResponse:
     settings = request.app[SETTINGS_KEY]
+    compact_page = 0
+    raw_query_string = request.rel_url.raw_query_string
+    if profile in {"x3", "x4"} and tail.rstrip("/") == "new":
+        try:
+            compact_page, raw_query_string = split_compact_page_query(raw_query_string)
+        except FeedError:
+            raise web.HTTPBadRequest(text="Invalid feed page\n") from None
     upstream_url = _upstream_url(
         settings,
         profile=profile,
         tail=tail,
         raw_path=request.rel_url.raw_path,
-        raw_query_string=request.rel_url.raw_query_string,
+        raw_query_string=raw_query_string,
         bridge_prefix=bridge_prefix,
     )
     start = time.monotonic()
@@ -665,6 +673,7 @@ async def _proxy_opds_request(
                     profile=profile,
                     upstream_origin=settings.upstream_url,
                     upstream_request_url=upstream_url,
+                    compact_page=compact_page,
                 )
             except FeedError:
                 _log_event(
