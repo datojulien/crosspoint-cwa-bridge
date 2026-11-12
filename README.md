@@ -118,6 +118,11 @@ Administration: https://192.168.1.50:8095/admin
 Use the normal CWA account when the reader requests Basic Auth. Never place a
 username or password in an OPDS URL.
 
+The X3/X4 “Recently added Books” XML feed returns at most 10 books per page
+to reduce reader memory use. Its Next/Previous links cover every upstream
+result, retaining descriptions and download links. This does not change CWA's
+global page size or the Original EPUB/KOReader feed.
+
 ## Configuration
 
 `.env.example` contains the host-specific Compose values. Runtime limits live

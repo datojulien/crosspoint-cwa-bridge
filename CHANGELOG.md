@@ -19,6 +19,8 @@ All notable changes to this project are documented here. Versions follow
 
 ### Fixed
 
+- Split X3/X4 Recently Added OPDS XML into compact 10-book pages while
+  retaining forward/backward navigation across CWA result pages.
 - Canonicalize root-contained EPUB ZIP paths from metadata export and collapse
   byte-identical aliases without accepting root escapes or conflicting contents.
 
